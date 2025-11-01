@@ -5,3 +5,4 @@ NGX_ADDON_SRCS="$NGX_ADDON_SRCS \
                 $ngx_addon_dir/ngx_http_websocket_stat_module.c \
                 $ngx_addon_dir/ngx_http_websocket_stat_format.c \
                 $ngx_addon_dir/ngx_http_websocket_stat_frame_counter.c"
+
