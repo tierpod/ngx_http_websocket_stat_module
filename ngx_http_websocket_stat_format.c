@@ -1,9 +1,10 @@
+#include "ngx_http_websocket_stat_format.h"
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "ngx_http_websocket_stat_format.h"
 
 const char PLACE_HOLDER_CHR = 'X';
 
