@@ -1,5 +1,7 @@
 #include "ngx_http_websocket_stat_format.h"
 
+#include <ngx_core.h>
+#include <ngx_http.h>
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -13,7 +15,7 @@ size_t HTTP_VAR_LEN = sizeof("$http_") - 1;
 
 template_variable null_variable = {NULL, 0, 0, NULL};
 const char *http_header_var(ngx_http_request_t *r, void *data);
-template_variable header_variable = {NULL, 0, 50, http_header_var};
+template_variable header_variable = {NULL, 0, 150, http_header_var};
 
 typedef struct {
     const template_variable *variable;
