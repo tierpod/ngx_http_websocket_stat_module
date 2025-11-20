@@ -193,8 +193,13 @@ char *
 apply_template(compiled_template *template_cmpl, ngx_http_request_t *r,
                void *data)
 {
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "websocket stat, in apply_template()");
+
     char *result = malloc(strlen(template_cmpl->compiled_template_str) + 1);
     strcpy(result, template_cmpl->compiled_template_str);
+
     unsigned int i;
     for (i = 0; i < template_cmpl->variable_occurances->nelts; i++) {
         variable_occurance *occ =

@@ -91,15 +91,29 @@ Base64Encode(unsigned char *hash, int hash_len, char *buffer, int len)
 void
 websocket_log(char *str)
 {
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0,
+                   "websocket stat, in websocket_log()");
+
     if (!ws_log)
         return;
-    ngx_write_fd(ws_log->file->fd, str, strlen(str));
-    ngx_write_fd(ws_log->file->fd, &CARET_RETURN, sizeof(char));
+
+    int len = strlen(str);
+    char *log_str = malloc(len + 1);
+
+    memcpy(log_str, str, len);
+    log_str[len] = CARET_RETURN;
+    ngx_write_fd(ws_log->file->fd, log_str, len + 1);
+
+    free(log_str);
 }
 
 void
 ws_do_log(compiled_template *template, ngx_http_request_t *r, void *ctx)
 {
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "websocket stat, in ws_do_log()");
+
     if (ws_log && template) {
         char *log_line = apply_template(template, r, ctx);
         websocket_log(log_line);
@@ -117,11 +131,11 @@ compiled_template *log_close_template;
 compiled_template *log_open_template;
 
 char *default_log_template_str =
-    "$time_local: packet received from $ws_packet_source";
-char *default_open_log_template_str = "websocket connection opened";
-char *default_close_log_template_str = "websocket connection closed";
-
-ssize_t (*orig_recv)(ngx_connection_t *c, u_char *buf, size_t size);
+    "$remote_addr [$time_local] $host type $ws_opcode packet from $ws_packet_source";
+char *default_open_log_template_str =
+    "$remote_addr [$time_local] $host websocket connection opened";
+char *default_close_log_template_str =
+    "$remote_addr [$time_local] $host websocket connection closed by $ws_packet_source";
 
 static ngx_command_t ngx_http_websocket_stat_commands[] = {
 
@@ -177,18 +191,23 @@ static ngx_http_output_body_filter_pt ngx_http_next_body_filter;
 static ngx_http_output_header_filter_pt ngx_http_next_header_filter;
 
 static u_char responce_template[] =
-    "WebSocket connections: %lu\n"
-    "client websocket frames  | client websocket payload | client tcp data\n"
-    "%lu %lu %lu\n"
-    "upstream websocket frames  | upstream websocket payload | upstream tcp "
-    "data\n"
-    "%lu %lu %lu\n";
+    "nginx_websocket_stat_connections %lu\n"
+    "nginx_websocket_stat_client_frames %lu\n"
+    "nginx_websocket_stat_client_payload %lu\n"
+    "nginx_websocket_stat_client_tcp_data %lu\n"
+    "nginx_websocket_stat_upstream_frames %lu\n"
+    "nginx_websocket_stat_upstream_payload %lu\n"
+    "nginx_websocket_stat_upstream_tcp_data %lu\n";
 
-u_char msg[sizeof(responce_template) + 6 * NGX_ATOMIC_T_LEN];
+u_char msg[sizeof(responce_template) + 7 * NGX_ATOMIC_T_LEN];
 
 static ngx_int_t
 ngx_http_websocket_stat_handler(ngx_http_request_t *r)
 {
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "websocket stat, in ngx_http_websocket_stat_handler()");
+
     ngx_buf_t *b;
     ngx_chain_t out;
 
@@ -257,6 +276,7 @@ ngx_http_websocket_max_conn_setup(ngx_conf_t *cf, ngx_command_t *cmd,
     main_conf->max_ws_connections = atoi((char *)value[1].data);
     return NGX_CONF_OK;
 }
+
 static char *
 ngx_http_websocket_max_conn_age(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -290,12 +310,13 @@ ngx_http_ws_logfile(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     return NGX_CONF_OK;
 }
-typedef ssize_t (*send_func)(ngx_connection_t *c, u_char *buf, size_t size);
-send_func orig_recv, orig_send;
 
 static int
 check_ws_age(time_t conn_start_time, ngx_http_request_t *r)
 {
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "websocket stat, in check_ws_age()");
+
     ngx_http_websocket_main_conf_t *conf;
     conf = ngx_http_get_module_main_conf(r, ngx_http_websocket_stat_module);
     if (conf->max_ws_age > 0 &&
@@ -305,10 +326,14 @@ check_ws_age(time_t conn_start_time, ngx_http_request_t *r)
     }
     return NGX_OK;
 }
+
 // Packets that being send to a client
 ssize_t
-my_send(ngx_connection_t *c, u_char *buf, size_t size)
+ngx_http_websocket_stat_send(ngx_connection_t *c, u_char *buf, size_t size)
 {
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "websocket stat, in ngx_http_websocket_stat_send()");
 
     ngx_http_websocket_stat_ctx *ctx;
     ssize_t sz = size;
@@ -334,22 +359,58 @@ my_send(ngx_connection_t *c, u_char *buf, size_t size)
             ws_do_log(log_template, r, &template_ctx);
         }
     }
-    int n = orig_send(c, buf, size);
+
+    int n;
+    if (c->ssl) {
+        n = ngx_ssl_write(c, buf, size);
+    } else {
+        n = ngx_send(c, buf, size);
+    }
+
+    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "ngx_http_websocket_stat_send(): %d, eof %d, error %d",
+                   n, c->write->eof,c->write->error);
+
     if (n < 0) {
+        // connection to client is gone
         if (!ngx_atomic_cmp_set(ngx_websocket_stat_active, 0, 0)) {
             ngx_atomic_fetch_add(ngx_websocket_stat_active, -1);
-            ws_do_log(log_close_template, r, &template_ctx);
         }
+
+        if (c->ssl) {
+            c->recv = ngx_ssl_recv;
+            c->send = ngx_ssl_write;
+        } else {
+            c->recv = ngx_recv;
+            c->send = ngx_send;
+        }
+
+        template_ctx.from_client = 1; // means 'closed by client'
+        ws_do_log(log_close_template, r, &template_ctx);
     }
+
     return n;
 }
 
 // Packets received from a client
 ssize_t
-my_recv(ngx_connection_t *c, u_char *buf, size_t size)
+ngx_http_websocket_stat_recv(ngx_connection_t *c, u_char *buf, size_t size)
 {
 
-    int n = orig_recv(c, buf, size);
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "websocket stat, in ngx_http_websocket_stat_recv()");
+
+    int n;
+    if (c->ssl) {
+        n = ngx_ssl_recv(c, buf, size);
+    } else {
+        n = ngx_recv(c, buf, size);
+    }
+
+    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "ngx_http_websocket_stat_recv(): %d, eof %d, error %d",
+                   n, c->read->eof, c->read->error);
+
     if (n <= 0) {
         return n;
     }
@@ -389,6 +450,14 @@ ngx_http_websocket_stat_header_filter(ngx_http_request_t *r)
 static ngx_int_t
 ngx_http_websocket_stat_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "websocket stat, in ngx_http_websocket_stat_body_filter()");
+
+    ngx_log_debug4(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "http_websocket_stat_body_filter(): read (eof %d, error %d), write (eof %d, error %d)",
+                    r->connection->read->eof, r->connection->read->error,
+                    r->connection->write->eof, r->connection->write->error);
+
     if (!r->upstream)
         return ngx_http_next_body_filter(r, in);
 
@@ -414,17 +483,31 @@ ngx_http_websocket_stat_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
             ws_do_log(log_open_template, r, &template_ctx);
             ngx_http_set_ctx(r, ctx, ngx_http_websocket_stat_module);
-            orig_recv = r->connection->recv;
-            r->connection->recv = my_recv;
-            orig_send = r->connection->send;
-            r->connection->send = my_send;
+
+            r->connection->recv = ngx_http_websocket_stat_recv;
+            r->connection->send = ngx_http_websocket_stat_send;
+
             ngx_atomic_fetch_add(ngx_websocket_stat_active, 1);
             ctx->ws_conn_start_time = ngx_time();
         } else {
+            // connection to ustream is gone
             if (!ngx_atomic_cmp_set(ngx_websocket_stat_active, 0, 0)) {
                 ngx_atomic_fetch_add(ngx_websocket_stat_active, -1);
-                ws_do_log(log_close_template, r, &template_ctx);
             }
+
+            if (r->connection->ssl) {
+                r->connection->recv = ngx_ssl_recv;
+                r->connection->send = ngx_ssl_write;
+            } else {
+                r->connection->recv = ngx_recv;
+                r->connection->send = ngx_send;
+            }
+
+            template_ctx.from_client = 0; // means 'closed by upstream'
+            if (r->connection->read->eof) {
+                template_ctx.from_client = 1; // means 'closed by client'
+            }
+            ws_do_log(log_close_template, r, &template_ctx);
         }
     }
 
@@ -440,7 +523,7 @@ ws_packet_type(ngx_http_request_t *r, void *data)
         return UNKNOWN_VAR;
 
     char* buff = ngx_pcalloc(r->pool, NGX_ATOMIC_T_LEN);
-    snprintf(buff, NGX_ATOMIC_T_LEN, "%d", frame_cntr->current_frame_type);
+    snprintf(buff, NGX_ATOMIC_T_LEN, "0x%X", frame_cntr->current_frame_type);
     return buff;
 }
 
@@ -515,19 +598,9 @@ ws_connection_age(ngx_http_request_t *r, void *data)
 const char *
 local_time(ngx_http_request_t *r, void *data)
 {
-    char* buff = ngx_pcalloc(r->pool, ngx_cached_http_time.len + 1);
-    memcpy(buff, ngx_cached_http_time.data, ngx_cached_http_time.len);
-    buff[ngx_cached_http_time.len] = '\0';
-    return buff;
-}
-
-const char *
-remote_ip(ngx_http_request_t *r, void *data)
-{
-    char* buff = ngx_pcalloc(r->pool, r->connection->addr_text.len + 1);
-    memcpy(buff, r->connection->addr_text.data, r->connection->addr_text.len);
-    buff[r->connection->addr_text.len] = '\0';
-
+    char* buff = ngx_pcalloc(r->pool, ngx_cached_http_log_time.len + 1);
+    memcpy(buff, ngx_cached_http_log_time.data, ngx_cached_http_log_time.len);
+    buff[ngx_cached_http_log_time.len] = '\0';
     return buff;
 }
 
@@ -546,11 +619,18 @@ upstream_addr(ngx_http_request_t *r, void *data)
     template_ctx_s *ctx = data;
     if (!ctx || !ctx->ws_ctx)
         return UNKNOWN_VAR;
+
     if (r->upstream_states == NULL || r->upstream_states->nelts == 0)
         return UNKNOWN_VAR;
-    ngx_http_upstream_state_t *state;
+
+    ngx_http_upstream_state_t  *state;
     state = r->upstream_states->elts;
-    return (const char *)state->peer->data;
+
+    char* buff = ngx_pcalloc(r->pool, state[r->upstream_states->nelts - 1].peer->len + 1);
+    memcpy(buff, state[r->upstream_states->nelts - 1].peer->data, state[r->upstream_states->nelts - 1].peer->len);
+    buff[state[r->upstream_states->nelts - 1].peer->len] = '\0';
+
+    return buff;
 }
 
 #define GEN_CORE_GET_FUNC(fname, var)                                          \
@@ -566,6 +646,7 @@ GEN_CORE_GET_FUNC(remote_addr, "remote_addr")
 GEN_CORE_GET_FUNC(remote_port, "remote_port")
 GEN_CORE_GET_FUNC(server_addr, "server_addr")
 GEN_CORE_GET_FUNC(server_port, "server_port")
+GEN_CORE_GET_FUNC(host, "host")
 
 const template_variable variables[] = {
     {VAR_NAME("$ws_opcode"), sizeof("ping") - 1, ws_packet_type},
@@ -573,7 +654,7 @@ const template_variable variables[] = {
     {VAR_NAME("$ws_total_payload_size"), NGX_SIZE_T_LEN, ws_total_payload_size},
     {VAR_NAME("$ws_packet_source"), sizeof("upstream") - 1, ws_packet_source},
     {VAR_NAME("$ws_conn_age"), NGX_SIZE_T_LEN, ws_connection_age},
-    {VAR_NAME("$time_local"), sizeof("Mon, 23 Oct 2017 11:27:42 GMT") - 1,
+    {VAR_NAME("$time_local"), sizeof("28/Sep/1970:12:00:00 +0600") - 1,
      local_time},
     {VAR_NAME("$upstream_addr"), 160, upstream_addr},
     {VAR_NAME("$request"), 160, request},
@@ -584,8 +665,7 @@ const template_variable variables[] = {
     {VAR_NAME("$remote_port"), 60, remote_port},
     {VAR_NAME("$server_addr"), 60, server_addr},
     {VAR_NAME("$server_port"), 60, server_port},
-    // TODO: Delete this since its duplicating $remote_add
-    {VAR_NAME("$remote_ip"), sizeof("000.000.000.000") - 1, remote_ip},
+    {VAR_NAME("$host"), 160, host},
     {NULL, 0, 0, NULL}};
 
 static void *
@@ -708,7 +788,12 @@ send_close_packet(ngx_connection_t *connection, int status, const char *reason)
     cbuf[3] = 0xFF & status;        // Status LSB : .... ....
     memcpy(&cbuf[4], reason, rlen);
     int cbuflen = rlen + 2;
-    orig_send(connection, (unsigned char *)cbuf, cbuflen);
+
+    if (connection->ssl) {
+        ngx_ssl_write(connection, (unsigned char *)cbuf, cbuflen);
+    } else {
+        ngx_send(connection, (unsigned char *)cbuf, cbuflen);
+    }
 }
 
 char salt[GUID_SIZE + KEY_SIZE + 1];
@@ -742,6 +827,10 @@ static ngx_int_t
 ngx_http_websocket_request_handler(ngx_http_request_t *r)
 {
     ngx_http_websocket_main_conf_t *conf;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "websocket stat, in ngx_http_websocket_request_handler()");
+
     conf = ngx_http_get_module_main_conf(r, ngx_http_websocket_stat_module);
     if (conf == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;

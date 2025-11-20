@@ -33,12 +33,12 @@ To set maximum single connection lifetime use ws_conn_age parameter. Argument is
 
 Here is a list of variables you can use in log format string:
 
- * $ws_opcode - websocket packet opcode. Look into https://tools.ietf.org/html/rfc6455 Section 5.2, Base Framing Protocol.
+ * $ws_opcode - Websocket packet opcode. Look into https://tools.ietf.org/html/rfc6455 Section 5.2, Base Framing Protocol.
  * $ws_payload_size - Websocket packet size without protocol specific data. Only data that been sent or received by the client
  * $ws_total_payload_size - total packet size on a Websocket connection, without protocol specific data. Only data that been sent or received by the client
- * $ws_packet_source - Could be "client" if packet has been sent by the user or "upstream" if it has been received from the server
+ * $ws_packet_source - Could be "client" if packet has been sent by the user or "upstream" if it has been received from the server. Also, supported in connection close log with meaning "closed by client/upstream"
  * $ws_conn_age - Number of seconds connection is alive
- * $time_local - Nginx local time, date and timezone
+ * $time_local - Nginx local time, date and timezone (in log format)
  * $request - Http reqeust string. Usual looks like "GET /uri HTTP/1.1"
  * $uri - Http request uri.
  * $request_id - unique random generated request id.
@@ -47,7 +47,8 @@ Here is a list of variables you can use in log format string:
  * $remote_port - Client's remote port
  * $server_addr - Server's remote ip address
  * $server_port - Server's port
- * $upstream_addr - websocket backend address
+ * $upstream_addr - Websocket backend address
+ * $host - Host name (from request, or Host header, or server_name)
 
 To read websocket statistic there is GET request should be set up at "location" location of nginx config file with ws_stat command in it. Look into example section for details.
 

@@ -33,6 +33,10 @@ char
 frame_counter_process_message(u_char **buffer, ssize_t *size,
                               ngx_frame_counter_t *frame_counter)
 {
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0,
+                  "websocket stat, in frame_counter_process_message()");
+
     while (*size > 0) {
         switch (frame_counter->stage) {
         case HEADER:
